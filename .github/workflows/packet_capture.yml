@@ -1,0 +1,61 @@
+name: CIPAT Wireshark Network Capture
+
+on:
+  workflow_dispatch:
+  push:
+
+jobs:
+  capture-traffic:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Dependencies & Wireshark CLI Tools
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y tcpdump tshark
+          pip install cryptography pycryptodome pillow
+
+      - name: Generate CIPAT Payload
+        run: python setup_payload.py
+
+      - name: Start Wireshark Packet Capture (tcpdump)
+        run: |
+          sudo tcpdump -i lo port 9999 -w cipat_network_capture.pcap &
+          echo "SNIFFER_PID=$!" >> $GITHUB_ENV
+          sleep 2
+
+      - name: Execute Socket Exchange (Receiver & Sender)
+        run: |
+          python receiver_server.py &
+          sleep 2
+          python sender_client.py
+          sleep 2
+
+      - name: Stop Capture & Run Wireshark Packet Analysis (tshark)
+        run: |
+          sudo kill -2 ${{ env.SNIFFER_PID }} || true
+          sleep 1
+          echo "================================================================="
+          echo "           WIRESHARK / TSHARK PACKET LIST SUMMARY                "
+          echo "================================================================="
+          tshark -r cipat_network_capture.pcap
+          
+          echo ""
+          echo "================================================================="
+          echo "      FOLLOW TCP STREAM (WHAT AN EAVESDROPPER CAPTURES)          "
+          echo "================================================================="
+          tshark -r cipat_network_capture.pcap -z "follow,tcp,ascii,0"
+
+      - name: Upload PCAP Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cipat-pcap-evidence
+          path: cipat_network_capture.pcap
